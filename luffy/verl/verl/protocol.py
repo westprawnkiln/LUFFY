@@ -111,31 +111,44 @@ def fold_batch_dim(data: 'DataProto', new_batch_size):
     """
     Fold a batch dim from [bsz, xxx] into [new_bsz, bsz // new_bsz, xxx]
     """
-    # TODO: Implement batch dimension folding for efficient processing
-    # TODO: Add validation for batch size compatibility
-    # TODO: Handle edge cases where batch_size is not divisible by new_batch_size
     # TODO: Optimize memory usage during tensor reshaping
     # TODO: Add support for different tensor types and shapes
     
     batch_size = data.batch.batch_size[0]
     assert batch_size % new_batch_size == 0
-    
-    # Placeholder implementation - full implementation needed
-    return data
+
+    tensor: TensorDict = data.batch
+    non_tensor = data.non_tensor_batch
+
+    tensor = tensor.view(new_batch_size, -1)
+    tensor.auto_batch_size_(batch_dims=1)
+
+    for key, val in non_tensor.items():
+        non_tensor[key] = np.reshape(val, newshape=(new_batch_size, -1, *val.shape[1:]))
+
+    return DataProto(batch=tensor, non_tensor_batch=non_tensor, meta_info=data.meta_info)
 
 
 def unfold_batch_dim(data: 'DataProto', batch_dims=2):
     """
     Unfold the first n dims as new batch dim
     """
-    # TODO: Implement batch dimension unfolding functionality
-    # TODO: Add support for variable batch dimensions
     # TODO: Optimize tensor view operations for performance
-    # TODO: Handle non-tensor batch data reshaping properly
     # TODO: Add error handling for invalid batch dimensions
     
-    # Placeholder implementation - needs complete rewrite
-    return data
+    tensor: TensorDict = data.batch
+    non_tensor = data.non_tensor_batch
+    tensor.auto_batch_size_(batch_dims=batch_dims)
+    tensor = tensor.view(-1)
+
+    batch_size = tensor.batch_size[0]
+
+    non_tensor_new = {}
+
+    for key, val in non_tensor.items():
+        non_tensor_new[key] = np.reshape(val, newshape=(batch_size, *val.shape[batch_dims:]))
+
+    return DataProto(batch=tensor, non_tensor_batch=non_tensor_new, meta_info=data.meta_info)
 
 
 def collate_fn(x: list['DataProtoItem']):

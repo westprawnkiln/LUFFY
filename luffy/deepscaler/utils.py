@@ -42,19 +42,38 @@ def call_oai_rm_llm(
     Returns:
         Generated text(s) from the model
     """
-    # TODO: Implement OpenAI API client initialization
-    # TODO: Add proper authentication handling
-    # TODO: Implement exponential backoff retry logic for rate limits
-    # TODO: Add comprehensive error handling for different API errors
-    # TODO: Implement response parsing and validation
     # TODO: Add logging for API calls and errors
     # TODO: Support batch processing for multiple prompts
     # TODO: Add timeout configuration for API calls
     
-    # Placeholder implementation - needs complete API integration
+    client = openai.OpenAI()
+    backoff = 1
+    retry_count = int(retry_count)
+
+    for _ in range(retry_count):
+        try:
+            response = client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=temperature,
+                n=n,
+            )
+            break
+        except Exception as exc:
+            if "429" in str(exc):
+                print("Retry due to rate limit: ", exc)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 64)  # Exponential backoff up to 64s
+                continue
+            print("Exception: ", exc)
+            return []
+
     if n == 1:
-        return "Placeholder response - OpenAI integration needed"
-    return ["Placeholder response - OpenAI integration needed"] * n
+        return response.choices[0].message.content
+    return [choice.message.content for choice in response.choices]
 
 
 def call_gemini_llm(
