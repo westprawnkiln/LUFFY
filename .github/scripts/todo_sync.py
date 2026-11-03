@@ -36,6 +36,13 @@ def scan_ref(ref):
     return entries
 
 
+def by_path(entries):
+    result = {}
+    for entry in entries:
+        result.setdefault(entry["path"], []).append(entry)
+    return result
+
+
 def format_entries(entries):
     return [f"- [ ] **{e['path']}:{e['line']}** - {e['text']}" for e in entries]
 
@@ -53,7 +60,6 @@ def parse_readme_entries(readme):
         match = README_RE.match(line)
         if not match:
             raise RuntimeError(f"Unexpected README TODO line format: {line!r}")
-            continue
         entries.append({"path": match.group("path"), "line": int(match.group("line")), "text": match.group("text")})
     return entries
 
@@ -77,29 +83,50 @@ def main():
     dev_readme = git_out("show", "origin/dev:README.md")
     baseline_entries = parse_readme_entries(main_readme)
     main_entries = scan_ref("origin/main")
-    print(f"Baseline README entries: {len(baseline_entries)}")
-    print(f"Scanned main TODO entries: {len(main_entries)}")
-    if main_entries != baseline_entries:
-        print("VALIDATION FAILED: scanner does not reproduce the main baseline", file=sys.stderr)
-        print_diff(format_entries(baseline_entries), format_entries(main_entries), "README-baseline", "scanned-main")
-        return 1
-    print("VALIDATION PASSED: scanner exactly reproduces the main README baseline.")
-
     dev_entries = scan_ref("origin/dev")
-    old_section = format_entries(baseline_entries)
-    new_section = format_entries(dev_entries)
-    print(f"Scanned dev TODO entries: {len(dev_entries)}")
-    print_diff(old_section, new_section, "main-README", "dev-scan")
-    print("\nDEV SECTION BEGIN")
+    main_by_path = by_path(main_entries)
+    dev_by_path = by_path(dev_entries)
+    baseline_by_path = by_path(baseline_entries)
+
+    changed_py_paths = set(git_out("diff", "--name-only", "origin/main", "origin/dev", "--", "*.py").splitlines())
+    scan_changed_paths = {path for path in set(main_by_path) | set(dev_by_path)
+                          if main_by_path.get(path, []) != dev_by_path.get(path, [])}
+    print(f"Baseline README entries: {len(baseline_entries)}")
+    print(f"Scanned main TODO entries: {len(main_entries)} across {len(main_by_path)} files")
+    print(f"Scanned dev TODO entries: {len(dev_entries)} across {len(dev_by_path)} files")
+    print(f"Python files changed main-to-dev: {sorted(changed_py_paths)}")
+    print(f"Files whose scanned TODOs changed: {sorted(scan_changed_paths)}")
+    if changed_py_paths != scan_changed_paths:
+        print("WARNING: changed Python files and files with TODO changes differ", file=sys.stderr)
+
+    print("\nMAIN-TO-DEV TODO SCAN DIFF BEGIN")
+    print_diff(format_entries(main_entries), format_entries(dev_entries), "main-scan", "dev-scan")
+    print("MAIN-TO-DEV TODO SCAN DIFF END")
+
+    # Use the README as the baseline, and replace only the TODO blocks for files
+    # changed by main-to-dev. This preserves unrelated pre-existing README choices.
+    final_entries = [entry for entry in baseline_entries if entry["path"] not in changed_py_paths]
+    for path in sorted(changed_py_paths):
+        old_for_path = baseline_by_path.get(path, [])
+        scanned_old_for_path = main_by_path.get(path, [])
+        if old_for_path != scanned_old_for_path:
+            print(f"ERROR: baseline TODOs for {path} do not match the main scan", file=sys.stderr)
+            print_diff(format_entries(old_for_path), format_entries(scanned_old_for_path), "README-baseline", "main-scan")
+            return 1
+        final_entries.extend(dev_by_path.get(path, []))
+    final_entries.sort(key=lambda item: (item["path"], item["line"]))
+
+    print(f"Final README TODO entries: {len(final_entries)}")
+    print("\nREADME BASELINE-TO-DEV DIFF BEGIN")
+    print_diff(format_entries(baseline_entries), format_entries(final_entries), "main-README", "dev-README")
+    print("README BASELINE-TO-DEV DIFF END")
+    print("\nFINAL DEV SECTION BEGIN")
     print(TITLE)
     print()
-    print("\n".join(new_section))
-    print("DEV SECTION END")
+    print("\n".join(format_entries(final_entries)))
+    print("FINAL DEV SECTION END")
 
-    expected_dev_readme = replace_readme_todos(dev_readme, dev_entries)
-    # Ensure only the TODO section changes.
-    if replace_readme_todos(dev_readme, baseline_entries) != dev_readme:
-        print("WARNING: current dev README differs from the main baseline outside the TODO section?", file=sys.stderr)
+    expected_dev_readme = replace_readme_todos(dev_readme, final_entries)
     apply = os.environ.get("APPLY", "").lower() == "true"
     if not apply:
         print("Dry run only; set apply=true to commit.")
